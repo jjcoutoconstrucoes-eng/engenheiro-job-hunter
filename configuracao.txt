@@ -1,0 +1,23 @@
+PROJETO: Engenheiro Job Hunter
+
+OBJETIVO:
+Encontrar vagas de Engenharia Civil com foco em:
+- Engenheiro Orçamentista
+- Engenheiro de Orçamentos
+- Engenheiro de Custos
+- Engenheiro de Planejamento
+- Engenheiro Civil
+
+SALÁRIO MÍNIMO DE INTERESSE:
+R$ 12.000
+
+LOCALIZAÇÃO PRIORITÁRIA:
+- Rio de Janeiro
+- Niterói
+- Região Metropolitana
+- Remoto
+- Híbrido
+- Presencial
+
+STATUS:
+Projeto iniciado.
