@@ -34,7 +34,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: vagas-encontradas
-          path: |
-            vagas_encontradas.csv
-            debug_google.html
-          if-no-files-found: warn
+          path: vagas_encontradas.csv
+          if-no-files-found: error
