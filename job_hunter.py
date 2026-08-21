@@ -18,7 +18,7 @@ from config import (
 
 # ============================================================
 # JOB HUNTER - ENGENHEIRO ORÇAMENTISTA
-# ETAPA 5 - COLETA DE RESULTADOS
+# ETAPA 5 - COLETA DE RESULTADOS + DIAGNÓSTICO
 # ============================================================
 
 print("=" * 70)
@@ -233,10 +233,33 @@ def consultar_google(site, dominio, local):
 
         print(f"Resultados encontrados: {len(resultados)}")
 
+        # ====================================================
+        # DIAGNÓSTICO
+        # Se não encontrar resultados, salva o HTML recebido
+        # ====================================================
+
+        if len(resultados) == 0:
+
+            arquivo_debug = "debug_google.html"
+
+            with open(
+                arquivo_debug,
+                "w",
+                encoding="utf-8",
+            ) as arquivo:
+                arquivo.write(resposta.text)
+
+            print("⚠️ Nenhum resultado extraído.")
+            print(
+                f"HTML salvo para diagnóstico: {arquivo_debug}"
+            )
+
         return resultados
 
     except requests.RequestException as erro:
+
         print(f"❌ Erro na consulta: {erro}")
+
         return []
 
 
@@ -258,7 +281,11 @@ for site in SITES:
     dominio = DOMINIOS.get(site)
 
     if not dominio:
-        print(f"\n⚠️ Domínio não configurado: {site}")
+
+        print(
+            f"\n⚠️ Domínio não configurado: {site}"
+        )
+
         continue
 
     for local in LOCALIZACOES:
@@ -274,8 +301,11 @@ for site in SITES:
         for resultado in resultados:
 
             resultado["localidade_busca"] = local
-            resultado["data_coleta"] = datetime.now().strftime(
-                "%Y-%m-%d %H:%M:%S"
+
+            resultado["data_coleta"] = (
+                datetime.now().strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
             )
 
             todos_resultados.append(resultado)
@@ -294,6 +324,7 @@ print("REMOVENDO DUPLICIDADES")
 print("=" * 70)
 
 resultados_unicos = []
+
 urls_vistas = set()
 
 for resultado in todos_resultados:
@@ -304,6 +335,7 @@ for resultado in todos_resultados:
         continue
 
     urls_vistas.add(url)
+
     resultados_unicos.append(resultado)
 
 
