@@ -1,4 +1,3 @@
-```python
 from datetime import datetime
 from urllib.parse import quote, urlparse, parse_qs, unquote
 import csv
