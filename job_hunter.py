@@ -88,119 +88,37 @@ session.headers.update(HEADERS)
 
 
 # ============================================================
-# FUNÇÕES DE COLETA
+# FUNÇÃO - MONTAR CONSULTA
 # ============================================================
 
 def montar_consulta(cargo, local, dominio):
     """
     Monta a consulta para o Google News RSS.
+
+    LinkedIn:
+    - Restringe a busca para páginas de vagas.
+
+    Demais sites:
+    - Mantém a busca por domínio.
     """
 
-    consulta = (
-        f'"{cargo}" '
-        f'"{local}" '
-        f'site:{dominio}'
-    )
+    if dominio == "linkedin.com":
+
+        consulta = (
+            f'"{cargo}" '
+            f'"{local}" '
+            f'site:linkedin.com/jobs/view/'
+        )
+
+    else:
+
+        consulta = (
+            f'"{cargo}" '
+            f'"{local}" '
+            f'site:{dominio}'
+        )
 
     return consulta
-
-
-def consultar_rss(cargo, local, site, dominio):
-    """
-    Consulta o Google News RSS.
-    """
-
-    consulta = montar_consulta(
-        cargo,
-        local,
-        dominio,
-    )
-
-    url = (
-        "https://news.google.com/rss/search?"
-        + "q="
-        + quote(consulta)
-        + "&hl=pt-BR"
-        + "&gl=BR"
-        + "&ceid=BR:pt-419"
-    )
-
-    print(f"\n🔎 {site} | {cargo} | {local}")
-    print(f"Consulta: {consulta}")
-
-    try:
-
-        resposta = session.get(
-            url,
-            timeout=20,
-        )
-
-        print(f"Status HTTP: {resposta.status_code}")
-
-        if resposta.status_code != 200:
-            print(
-                "⚠️ RSS não retornou uma página válida."
-            )
-            return []
-
-        feed = feedparser.parse(
-            resposta.content
-        )
-
-        resultados = []
-
-        for item in feed.entries:
-
-            titulo = item.get(
-                "title",
-                "",
-            ).strip()
-
-            link = item.get(
-                "link",
-                "",
-            ).strip()
-
-            resumo = item.get(
-                "summary",
-                "",
-            ).strip()
-
-            data_publicacao = item.get(
-                "published",
-                "",
-            ).strip()
-
-            if not titulo or not link:
-                continue
-
-            resultados.append({
-                "titulo": titulo,
-                "site": site,
-                "url": link,
-                "localidade_busca": local,
-                "snippet": resumo,
-                "data_publicacao": data_publicacao,
-                "cargo_busca": cargo,
-                "data_coleta": datetime.now().strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                ),
-            })
-
-        print(
-            f"Resultados encontrados: "
-            f"{len(resultados)}"
-        )
-
-        return resultados
-
-    except requests.RequestException as erro:
-
-        print(
-            f"❌ Erro na consulta RSS: {erro}"
-        )
-
-        return []
 
 
 # ============================================================
@@ -247,6 +165,251 @@ def normalizar_texto(texto):
         )
 
     return texto
+
+
+# ============================================================
+# VALIDAR SE O RESULTADO É REALMENTE UMA VAGA
+# ============================================================
+
+def eh_vaga_valida(site, url, titulo, snippet):
+    """
+    Tenta eliminar páginas que não representam vagas.
+
+    O filtro é especialmente rígido para LinkedIn e Glassdoor,
+    pois esses sites retornam muitos perfis, salários e páginas
+    institucionais nas pesquisas do Google.
+    """
+
+    url_normalizada = str(url or "").lower()
+    titulo_normalizado = normalizar_texto(titulo)
+    snippet_normalizado = normalizar_texto(snippet)
+
+    texto = (
+        f"{titulo_normalizado} "
+        f"{snippet_normalizado}"
+    )
+
+    # ========================================================
+    # LINKEDIN
+    # ========================================================
+
+    if site == "LinkedIn":
+
+        # Perfil pessoal
+        if "/in/" in url_normalizada:
+            return False
+
+        # Empresa
+        if "/company/" in url_normalizada:
+            return False
+
+        # Somente vagas
+        if "/jobs/view/" not in url_normalizada:
+            return False
+
+        return True
+
+    # ========================================================
+    # GLASSDOOR
+    # ========================================================
+
+    if site == "Glassdoor":
+
+        termos_invalidos_url = [
+            "salarios",
+            "salario",
+            "salary",
+            "reviews",
+            "review",
+            "avaliacoes",
+            "empresa",
+            "companies",
+            "salaries",
+        ]
+
+        for termo in termos_invalidos_url:
+
+            if termo in url_normalizada:
+                return False
+
+        termos_invalidos_titulo = [
+            "salarios de",
+            "salario de",
+            "salários de",
+            "salário de",
+            "salary",
+            "salaries",
+            "avaliacoes de",
+            "avaliações de",
+            "reviews de",
+            "review de",
+        ]
+
+        for termo in termos_invalidos_titulo:
+
+            if termo in titulo_normalizado:
+                return False
+
+    # ========================================================
+    # FILTRO GERAL
+    # ========================================================
+
+    termos_invalidos = [
+        "perfil profissional",
+        "perfil de linkedin",
+        "curriculo",
+        "currículo",
+        "curriculum",
+        "cv ",
+        "salarios de",
+        "salário de",
+        "salários de",
+        "salary",
+        "salaries",
+        "avaliacoes de empresas",
+        "avaliações de empresas",
+        "reviews de empresas",
+        "company reviews",
+    ]
+
+    for termo in termos_invalidos:
+
+        if termo in titulo_normalizado:
+            return False
+
+    return True
+
+
+# ============================================================
+# FUNÇÃO - CONSULTAR RSS
+# ============================================================
+
+def consultar_rss(cargo, local, site, dominio):
+    """
+    Consulta o Google News RSS.
+    """
+
+    consulta = montar_consulta(
+        cargo,
+        local,
+        dominio,
+    )
+
+    url = (
+        "https://news.google.com/rss/search?"
+        + "q="
+        + quote(consulta)
+        + "&hl=pt-BR"
+        + "&gl=BR"
+        + "&ceid=BR:pt-419"
+    )
+
+    print(f"\n🔎 {site} | {cargo} | {local}")
+    print(f"Consulta: {consulta}")
+
+    try:
+
+        resposta = session.get(
+            url,
+            timeout=20,
+        )
+
+        print(
+            f"Status HTTP: "
+            f"{resposta.status_code}"
+        )
+
+        if resposta.status_code != 200:
+
+            print(
+                "⚠️ RSS não retornou uma página válida."
+            )
+
+            return []
+
+        feed = feedparser.parse(
+            resposta.content
+        )
+
+        resultados = []
+
+        descartados = 0
+
+        for item in feed.entries:
+
+            titulo = item.get(
+                "title",
+                "",
+            ).strip()
+
+            link = item.get(
+                "link",
+                "",
+            ).strip()
+
+            resumo = item.get(
+                "summary",
+                "",
+            ).strip()
+
+            data_publicacao = item.get(
+                "published",
+                "",
+            ).strip()
+
+            if not titulo or not link:
+                continue
+
+            # ------------------------------------------------
+            # VALIDAR SE É UMA VAGA
+            # ------------------------------------------------
+
+            if not eh_vaga_valida(
+                site,
+                link,
+                titulo,
+                resumo,
+            ):
+
+                descartados += 1
+
+                continue
+
+            resultados.append({
+                "titulo": titulo,
+                "site": site,
+                "url": link,
+                "localidade_busca": local,
+                "snippet": resumo,
+                "data_publicacao": data_publicacao,
+                "cargo_busca": cargo,
+                "data_coleta": datetime.now().strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                ),
+            })
+
+        print(
+            f"Resultados válidos: "
+            f"{len(resultados)}"
+        )
+
+        if descartados > 0:
+
+            print(
+                f"Resultados descartados por "
+                f"não parecerem vagas: "
+                f"{descartados}"
+            )
+
+        return resultados
+
+    except requests.RequestException as erro:
+
+        print(
+            f"❌ Erro na consulta RSS: {erro}"
+        )
+
+        return []
 
 
 # ============================================================
@@ -461,6 +624,18 @@ def identificar_nivel(texto):
     if "pleno" in encontrados:
         return "Pleno"
 
+    if "especialista" in encontrados:
+        return "Especialista"
+
+    if (
+        "coordenador" in encontrados
+        or "coordenadora" in encontrados
+    ):
+        return "Coordenador"
+
+    if "gerente" in encontrados:
+        return "Gerente"
+
     return encontrados[0].title()
 
 
@@ -481,6 +656,7 @@ def identificar_local(texto, local_busca):
             if palavra in texto:
 
                 if local not in locais_encontrados:
+
                     locais_encontrados.append(
                         local
                     )
@@ -488,6 +664,7 @@ def identificar_local(texto, local_busca):
                 break
 
     if locais_encontrados:
+
         return ", ".join(
             locais_encontrados
         )
@@ -535,17 +712,21 @@ def calcular_score(resultado):
         if palavra in texto:
 
             score += 30
+
             motivos.append(
                 f"Cargo compatível: {palavra}"
             )
 
             cargo_forte_encontrado = True
+
             break
 
     if not cargo_forte_encontrado:
 
         if "engenheiro civil" in texto:
+
             score += 18
+
             motivos.append(
                 "Engenheiro Civil"
             )
@@ -570,6 +751,7 @@ def calcular_score(resultado):
     for palavra in areas:
 
         if palavra in texto:
+
             pontos_area += 4
 
     pontos_area = min(
@@ -711,10 +893,11 @@ def calcular_score(resultado):
     for palavra in PALAVRAS_POSITIVAS:
 
         if palavra in texto:
+
             palavras_encontradas += 1
 
     bonus = min(
-        palavras_encontradas * 1,
+        palavras_encontradas,
         5,
     )
 
@@ -764,15 +947,25 @@ def calcular_score(resultado):
     # --------------------------------------------------------
 
     if score >= 75:
-        classificacao = "ALTA PRIORIDADE"
+
+        classificacao = (
+            "ALTA PRIORIDADE"
+        )
 
     elif score >= 55:
-        classificacao = "BOA OPORTUNIDADE"
+
+        classificacao = (
+            "BOA OPORTUNIDADE"
+        )
 
     elif score >= 35:
-        classificacao = "BAIXA PRIORIDADE"
+
+        classificacao = (
+            "BAIXA PRIORIDADE"
+        )
 
     else:
+
         classificacao = "DESCARTAR"
 
     return {
@@ -801,7 +994,9 @@ total_buscas = 0
 
 for site in SITES:
 
-    dominio = DOMINIOS.get(site)
+    dominio = DOMINIOS.get(
+        site
+    )
 
     if not dominio:
 
@@ -953,15 +1148,19 @@ for vaga in vagas_analisadas:
     ]
 
     if classificacao == "ALTA PRIORIDADE":
+
         alta_prioridade += 1
 
     elif classificacao == "BOA OPORTUNIDADE":
+
         boa_oportunidade += 1
 
     elif classificacao == "BAIXA PRIORIDADE":
+
         baixa_prioridade += 1
 
     elif classificacao == "DESCARTAR":
+
         descartar += 1
 
 
