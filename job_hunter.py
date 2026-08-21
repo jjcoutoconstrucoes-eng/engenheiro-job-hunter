@@ -1,9 +1,9 @@
 from datetime import datetime
-from urllib.parse import quote, urlparse, parse_qs, unquote
+from urllib.parse import quote
 import csv
 import time
 import requests
-from bs4 import BeautifulSoup
+import feedparser
 
 from config import (
     CARGOS,
@@ -18,12 +18,12 @@ from config import (
 
 # ============================================================
 # JOB HUNTER - ENGENHEIRO ORÇAMENTISTA
-# ETAPA 5 - COLETA DE RESULTADOS + DIAGNÓSTICO
+# ETAPA 6 - COLETA VIA RSS
 # ============================================================
 
 print("=" * 70)
 print("JOB HUNTER - ENGENHEIRO ORÇAMENTISTA")
-print("ETAPA 5 - COLETA DE RESULTADOS")
+print("ETAPA 6 - COLETA VIA RSS")
 print("=" * 70)
 
 print(f"\nRobô executado em: {datetime.now()}")
@@ -50,11 +50,11 @@ print(f"- Níveis: {', '.join(NIVEL)}")
 
 
 # ============================================================
-# SITES
+# DOMÍNIOS
 # ============================================================
 
 DOMINIOS = {
-    "LinkedIn": "linkedin.com/jobs",
+    "LinkedIn": "linkedin.com",
     "Indeed": "br.indeed.com",
     "Gupy": "gupy.io",
     "InfoJobs": "infojobs.com.br",
@@ -69,13 +69,14 @@ DOMINIOS = {
 
 
 # ============================================================
-# CONFIGURAÇÃO HTTP
+# HTTP
 # ============================================================
 
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "AppleWebKit/537.36 "
+        "(KHTML, like Gecko) "
         "Chrome/131.0.0.0 Safari/537.36"
     ),
     "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
@@ -89,132 +90,48 @@ session.headers.update(HEADERS)
 # FUNÇÕES
 # ============================================================
 
-def limpar_url(url):
-    """Remove redirecionamentos do Google quando possível."""
+def montar_consulta(cargo, local, dominio):
+    """
+    Monta a consulta para o RSS.
 
-    if not url:
-        return ""
+    Usamos o domínio do site para tentar manter
+    os resultados relacionados à fonte desejada.
+    """
 
-    if url.startswith("/url?"):
-        parsed = urlparse(url)
-        params = parse_qs(parsed.query)
-
-        if "q" in params:
-            return unquote(params["q"][0])
-
-        if "url" in params:
-            return unquote(params["url"][0])
-
-    return url
-
-
-def eh_resultado_valido(url):
-    """Verifica se o link parece ser uma página externa válida."""
-
-    if not url:
-        return False
-
-    url = limpar_url(url)
-
-    if not url.startswith("http"):
-        return False
-
-    dominios_ignorados = [
-        "google.com",
-        "googleusercontent.com",
-        "gstatic.com",
-        "youtube.com",
-    ]
-
-    dominio = urlparse(url).netloc.lower()
-
-    for ignorado in dominios_ignorados:
-        if ignorado in dominio:
-            return False
-
-    return True
-
-
-def extrair_resultados_google(html, site):
-    """Extrai resultados básicos da página do Google."""
-
-    soup = BeautifulSoup(html, "html.parser")
-
-    resultados = []
-
-    # Estrutura mais comum do Google
-    blocos = soup.select("div.MjjYud")
-
-    # Fallback para estruturas diferentes
-    if not blocos:
-        blocos = soup.select("div.g")
-
-    for bloco in blocos:
-
-        titulo_tag = bloco.find("h3")
-
-        if not titulo_tag:
-            continue
-
-        titulo = titulo_tag.get_text(" ", strip=True)
-
-        link_tag = titulo_tag.find_parent("a")
-
-        if not link_tag:
-            continue
-
-        url = limpar_url(link_tag.get("href", ""))
-
-        if not eh_resultado_valido(url):
-            continue
-
-        # Tenta encontrar descrição/snippet
-        snippet = ""
-
-        for seletor in [
-            "div.VwiC3b",
-            "div.IsZvec",
-            "span.aCOpRe",
-        ]:
-            elemento = bloco.select_one(seletor)
-
-            if elemento:
-                snippet = elemento.get_text(" ", strip=True)
-                break
-
-        resultados.append({
-            "titulo": titulo,
-            "site": site,
-            "url": url,
-            "snippet": snippet,
-        })
-
-    return resultados
-
-
-def consultar_google(site, dominio, local):
-    """Executa uma pesquisa agrupando todos os cargos."""
-
-    cargos_busca = " OR ".join(
-        f'"{cargo}"' for cargo in CARGOS
+    consulta = (
+        f'"{cargo}" '
+        f'"{local}" '
+        f'site:{dominio}'
     )
 
-    pesquisa = (
-        f"site:{dominio} ({cargos_busca}) "
-        f'"{local}"'
+    return consulta
+
+
+def consultar_rss(cargo, local, site, dominio):
+    """
+    Consulta o Google News RSS.
+    """
+
+    consulta = montar_consulta(
+        cargo,
+        local,
+        dominio,
     )
 
     url = (
-        "https://www.google.com/search?"
+        "https://news.google.com/rss/search?"
         + "q="
-        + quote(pesquisa)
-        + "&num=10"
+        + quote(consulta)
+        + "&hl=pt-BR"
+        + "&gl=BR"
+        + "&ceid=BR:pt-419"
     )
 
-    print(f"\n🔎 {site} | {local}")
-    print(f"Consulta: {pesquisa}")
+    print(f"\n🔎 {site} | {cargo} | {local}")
+    print(f"Consulta: {consulta}")
 
     try:
+
         resposta = session.get(
             url,
             timeout=20,
@@ -223,42 +140,67 @@ def consultar_google(site, dominio, local):
         print(f"Status HTTP: {resposta.status_code}")
 
         if resposta.status_code != 200:
-            print("⚠️ Google não retornou uma página válida.")
+            print(
+                "⚠️ RSS não retornou uma página válida."
+            )
             return []
 
-        resultados = extrair_resultados_google(
-            resposta.text,
-            site,
+        feed = feedparser.parse(
+            resposta.content
         )
 
-        print(f"Resultados encontrados: {len(resultados)}")
+        resultados = []
 
-        # ====================================================
-        # DIAGNÓSTICO
-        # Se não encontrar resultados, salva o HTML recebido
-        # ====================================================
+        for item in feed.entries:
 
-        if len(resultados) == 0:
+            titulo = item.get(
+                "title",
+                "",
+            ).strip()
 
-            arquivo_debug = "debug_google.html"
+            link = item.get(
+                "link",
+                "",
+            ).strip()
 
-            with open(
-                arquivo_debug,
-                "w",
-                encoding="utf-8",
-            ) as arquivo:
-                arquivo.write(resposta.text)
+            resumo = item.get(
+                "summary",
+                "",
+            ).strip()
 
-            print("⚠️ Nenhum resultado extraído.")
-            print(
-                f"HTML salvo para diagnóstico: {arquivo_debug}"
-            )
+            data_publicacao = item.get(
+                "published",
+                "",
+            ).strip()
+
+            if not titulo or not link:
+                continue
+
+            resultados.append({
+                "titulo": titulo,
+                "site": site,
+                "url": link,
+                "localidade_busca": local,
+                "snippet": resumo,
+                "data_publicacao": data_publicacao,
+                "cargo_busca": cargo,
+                "data_coleta": datetime.now().strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                ),
+            })
+
+        print(
+            f"Resultados encontrados: "
+            f"{len(resultados)}"
+        )
 
         return resultados
 
     except requests.RequestException as erro:
 
-        print(f"❌ Erro na consulta: {erro}")
+        print(
+            f"❌ Erro na consulta RSS: {erro}"
+        )
 
         return []
 
@@ -269,7 +211,7 @@ def consultar_google(site, dominio, local):
 
 print("\n")
 print("=" * 70)
-print("INICIANDO COLETA DE RESULTADOS")
+print("INICIANDO COLETA VIA RSS")
 print("=" * 70)
 
 todos_resultados = []
@@ -288,30 +230,29 @@ for site in SITES:
 
         continue
 
-    for local in LOCALIZACOES:
+    # Nesta primeira versão usamos os cargos
+    # mais importantes para evitar excesso de consultas.
+    cargos_busca = CARGOS[:6]
 
-        total_buscas += 1
+    for cargo in cargos_busca:
 
-        resultados = consultar_google(
-            site,
-            dominio,
-            local,
-        )
+        for local in LOCALIZACOES:
 
-        for resultado in resultados:
+            total_buscas += 1
 
-            resultado["localidade_busca"] = local
-
-            resultado["data_coleta"] = (
-                datetime.now().strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
+            resultados = consultar_rss(
+                cargo,
+                local,
+                site,
+                dominio,
             )
 
-            todos_resultados.append(resultado)
+            todos_resultados.extend(
+                resultados
+            )
 
-        # Pequena pausa para evitar excesso de requisições
-        time.sleep(1.5)
+            # Pequena pausa entre consultas
+            time.sleep(1)
 
 
 # ============================================================
@@ -336,7 +277,9 @@ for resultado in todos_resultados:
 
     urls_vistas.add(url)
 
-    resultados_unicos.append(resultado)
+    resultados_unicos.append(
+        resultado
+    )
 
 
 # ============================================================
@@ -350,7 +293,9 @@ campos = [
     "site",
     "url",
     "localidade_busca",
+    "cargo_busca",
     "snippet",
+    "data_publicacao",
     "data_coleta",
 ]
 
@@ -368,7 +313,9 @@ with open(
 
     escritor.writeheader()
 
-    escritor.writerows(resultados_unicos)
+    escritor.writerows(
+        resultados_unicos
+    )
 
 
 # ============================================================
@@ -380,12 +327,35 @@ print("=" * 70)
 print("RESUMO DA EXECUÇÃO")
 print("=" * 70)
 
-print(f"- Sites configurados: {len(SITES)}")
-print(f"- Localizações: {len(LOCALIZACOES)}")
-print(f"- Buscas realizadas: {total_buscas}")
-print(f"- Resultados brutos: {len(todos_resultados)}")
-print(f"- Resultados únicos: {len(resultados_unicos)}")
-print(f"- Arquivo gerado: {arquivo_csv}")
+print(
+    f"- Sites configurados: {len(SITES)}"
+)
+
+print(
+    f"- Localizações: {len(LOCALIZACOES)}"
+)
+
+print(
+    f"- Cargos utilizados: {len(CARGOS[:6])}"
+)
+
+print(
+    f"- Buscas realizadas: {total_buscas}"
+)
+
+print(
+    f"- Resultados brutos: "
+    f"{len(todos_resultados)}"
+)
+
+print(
+    f"- Resultados únicos: "
+    f"{len(resultados_unicos)}"
+)
+
+print(
+    f"- Arquivo gerado: {arquivo_csv}"
+)
 
 print("\n")
 print("=" * 70)
