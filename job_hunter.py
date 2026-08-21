@@ -88,26 +88,23 @@ session.headers.update(HEADERS)
 
 
 # ============================================================
-# FUNÇÃO - MONTAR CONSULTA
+# CONSULTAS ESPECÍFICAS POR SITE
 # ============================================================
 
-def montar_consulta(cargo, local, dominio):
+def montar_consulta(cargo, local, site, dominio):
     """
-    Monta a consulta para o Google News RSS.
+    Monta uma consulta específica para cada site.
 
-    LinkedIn:
-    - Restringe a busca para páginas de vagas.
-
-    Demais sites:
-    - Mantém a busca por domínio.
+    O LinkedIn recebe uma busca restrita a /jobs/
+    para evitar perfis de pessoas.
     """
 
-    if dominio == "linkedin.com":
+    if site == "LinkedIn":
 
         consulta = (
             f'"{cargo}" '
             f'"{local}" '
-            f'site:linkedin.com/jobs/view/'
+            f'site:linkedin.com/jobs/'
         )
 
     else:
@@ -119,6 +116,226 @@ def montar_consulta(cargo, local, dominio):
         )
 
     return consulta
+
+
+# ============================================================
+# VALIDAÇÃO ESPECÍFICA DO LINKEDIN
+# ============================================================
+
+def resultado_linkedin_valido(titulo, snippet):
+    """
+    Verifica se o resultado do LinkedIn parece ser uma vaga
+    e não um perfil, currículo ou publicação.
+    """
+
+    texto = normalizar_texto(
+        f"{titulo} {snippet}"
+    )
+
+    titulo_normalizado = normalizar_texto(
+        titulo
+    )
+
+    # --------------------------------------------------------
+    # TERMOS FORTES DE VAGA
+    # --------------------------------------------------------
+
+    termos_vaga = [
+        "vaga",
+        "vagas",
+        "job",
+        "jobs",
+        "engenheiro",
+        "engenheira",
+        "analista",
+        "coordenador",
+        "coordenadora",
+        "gerente",
+        "orcamentista",
+        "planejamento",
+        "custos",
+        "orçamento",
+        "orcamento",
+        "especialista",
+        "supervisor",
+        "supervisora",
+    ]
+
+    tem_termo_vaga = any(
+        termo in texto
+        for termo in termos_vaga
+    )
+
+    # --------------------------------------------------------
+    # TERMOS QUE INDICAM PERFIL
+    # --------------------------------------------------------
+
+    termos_perfil = [
+        "linkedin brasil",
+        "linkedin",
+        "conexoes",
+        "conexões",
+        "seguidores",
+        "experiencia",
+        "experiência",
+        "perfil profissional",
+        "atualmente",
+        "trabalha na",
+        "trabalha como",
+        "profissional com",
+        "contato",
+    ]
+
+    # Se o título termina claramente em LinkedIn Brasil,
+    # normalmente é uma página de perfil.
+    if "linkedin brasil" in titulo_normalizado:
+        return False
+
+    # Alguns resultados de perfil têm nome de pessoa + profissão.
+    # Se houver muitos sinais de perfil, descartamos.
+    quantidade_perfil = sum(
+        1
+        for termo in termos_perfil
+        if termo in texto
+    )
+
+    if quantidade_perfil >= 2:
+        return False
+
+    return tem_termo_vaga
+
+
+# ============================================================
+# CONSULTA RSS
+# ============================================================
+
+def consultar_rss(cargo, local, site, dominio):
+    """
+    Consulta o Google News RSS.
+    """
+
+    consulta = montar_consulta(
+        cargo,
+        local,
+        site,
+        dominio,
+    )
+
+    url = (
+        "https://news.google.com/rss/search?"
+        + "q="
+        + quote(consulta)
+        + "&hl=pt-BR"
+        + "&gl=BR"
+        + "&ceid=BR:pt-419"
+    )
+
+    print(f"\n🔎 {site} | {cargo} | {local}")
+    print(f"Consulta: {consulta}")
+
+    try:
+
+        resposta = session.get(
+            url,
+            timeout=20,
+        )
+
+        print(
+            f"Status HTTP: "
+            f"{resposta.status_code}"
+        )
+
+        if resposta.status_code != 200:
+
+            print(
+                "⚠️ RSS não retornou "
+                "uma página válida."
+            )
+
+            return []
+
+        feed = feedparser.parse(
+            resposta.content
+        )
+
+        resultados = []
+
+        descartados_site = 0
+
+        for item in feed.entries:
+
+            titulo = item.get(
+                "title",
+                "",
+            ).strip()
+
+            link = item.get(
+                "link",
+                "",
+            ).strip()
+
+            resumo = item.get(
+                "summary",
+                "",
+            ).strip()
+
+            data_publicacao = item.get(
+                "published",
+                "",
+            ).strip()
+
+            if not titulo or not link:
+                continue
+
+            # ------------------------------------------------
+            # FILTRO ESPECIAL PARA LINKEDIN
+            # ------------------------------------------------
+
+            if site == "LinkedIn":
+
+                if not resultado_linkedin_valido(
+                    titulo,
+                    resumo,
+                ):
+
+                    descartados_site += 1
+
+                    continue
+
+            resultados.append({
+                "titulo": titulo,
+                "site": site,
+                "url": link,
+                "localidade_busca": local,
+                "snippet": resumo,
+                "data_publicacao": data_publicacao,
+                "cargo_busca": cargo,
+                "data_coleta": datetime.now().strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                ),
+            })
+
+        print(
+            f"Resultados encontrados: "
+            f"{len(resultados)}"
+        )
+
+        if site == "LinkedIn":
+
+            print(
+                f"Perfis/outros resultados "
+                f"descartados: {descartados_site}"
+            )
+
+        return resultados
+
+    except requests.RequestException as erro:
+
+        print(
+            f"❌ Erro na consulta RSS: {erro}"
+        )
+
+        return []
 
 
 # ============================================================
@@ -159,6 +376,7 @@ def normalizar_texto(texto):
     }
 
     for origem, destino in substituicoes.items():
+
         texto = texto.replace(
             origem,
             destino,
@@ -168,255 +386,11 @@ def normalizar_texto(texto):
 
 
 # ============================================================
-# VALIDAR SE O RESULTADO É REALMENTE UMA VAGA
-# ============================================================
-
-def eh_vaga_valida(site, url, titulo, snippet):
-    """
-    Tenta eliminar páginas que não representam vagas.
-
-    O filtro é especialmente rígido para LinkedIn e Glassdoor,
-    pois esses sites retornam muitos perfis, salários e páginas
-    institucionais nas pesquisas do Google.
-    """
-
-    url_normalizada = str(url or "").lower()
-    titulo_normalizado = normalizar_texto(titulo)
-    snippet_normalizado = normalizar_texto(snippet)
-
-    texto = (
-        f"{titulo_normalizado} "
-        f"{snippet_normalizado}"
-    )
-
-    # ========================================================
-    # LINKEDIN
-    # ========================================================
-
-    if site == "LinkedIn":
-
-        # Perfil pessoal
-        if "/in/" in url_normalizada:
-            return False
-
-        # Empresa
-        if "/company/" in url_normalizada:
-            return False
-
-        # Somente vagas
-        if "/jobs/view/" not in url_normalizada:
-            return False
-
-        return True
-
-    # ========================================================
-    # GLASSDOOR
-    # ========================================================
-
-    if site == "Glassdoor":
-
-        termos_invalidos_url = [
-            "salarios",
-            "salario",
-            "salary",
-            "reviews",
-            "review",
-            "avaliacoes",
-            "empresa",
-            "companies",
-            "salaries",
-        ]
-
-        for termo in termos_invalidos_url:
-
-            if termo in url_normalizada:
-                return False
-
-        termos_invalidos_titulo = [
-            "salarios de",
-            "salario de",
-            "salários de",
-            "salário de",
-            "salary",
-            "salaries",
-            "avaliacoes de",
-            "avaliações de",
-            "reviews de",
-            "review de",
-        ]
-
-        for termo in termos_invalidos_titulo:
-
-            if termo in titulo_normalizado:
-                return False
-
-    # ========================================================
-    # FILTRO GERAL
-    # ========================================================
-
-    termos_invalidos = [
-        "perfil profissional",
-        "perfil de linkedin",
-        "curriculo",
-        "currículo",
-        "curriculum",
-        "cv ",
-        "salarios de",
-        "salário de",
-        "salários de",
-        "salary",
-        "salaries",
-        "avaliacoes de empresas",
-        "avaliações de empresas",
-        "reviews de empresas",
-        "company reviews",
-    ]
-
-    for termo in termos_invalidos:
-
-        if termo in titulo_normalizado:
-            return False
-
-    return True
-
-
-# ============================================================
-# FUNÇÃO - CONSULTAR RSS
-# ============================================================
-
-def consultar_rss(cargo, local, site, dominio):
-    """
-    Consulta o Google News RSS.
-    """
-
-    consulta = montar_consulta(
-        cargo,
-        local,
-        dominio,
-    )
-
-    url = (
-        "https://news.google.com/rss/search?"
-        + "q="
-        + quote(consulta)
-        + "&hl=pt-BR"
-        + "&gl=BR"
-        + "&ceid=BR:pt-419"
-    )
-
-    print(f"\n🔎 {site} | {cargo} | {local}")
-    print(f"Consulta: {consulta}")
-
-    try:
-
-        resposta = session.get(
-            url,
-            timeout=20,
-        )
-
-        print(
-            f"Status HTTP: "
-            f"{resposta.status_code}"
-        )
-
-        if resposta.status_code != 200:
-
-            print(
-                "⚠️ RSS não retornou uma página válida."
-            )
-
-            return []
-
-        feed = feedparser.parse(
-            resposta.content
-        )
-
-        resultados = []
-
-        descartados = 0
-
-        for item in feed.entries:
-
-            titulo = item.get(
-                "title",
-                "",
-            ).strip()
-
-            link = item.get(
-                "link",
-                "",
-            ).strip()
-
-            resumo = item.get(
-                "summary",
-                "",
-            ).strip()
-
-            data_publicacao = item.get(
-                "published",
-                "",
-            ).strip()
-
-            if not titulo or not link:
-                continue
-
-            # ------------------------------------------------
-            # VALIDAR SE É UMA VAGA
-            # ------------------------------------------------
-
-            if not eh_vaga_valida(
-                site,
-                link,
-                titulo,
-                resumo,
-            ):
-
-                descartados += 1
-
-                continue
-
-            resultados.append({
-                "titulo": titulo,
-                "site": site,
-                "url": link,
-                "localidade_busca": local,
-                "snippet": resumo,
-                "data_publicacao": data_publicacao,
-                "cargo_busca": cargo,
-                "data_coleta": datetime.now().strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                ),
-            })
-
-        print(
-            f"Resultados válidos: "
-            f"{len(resultados)}"
-        )
-
-        if descartados > 0:
-
-            print(
-                f"Resultados descartados por "
-                f"não parecerem vagas: "
-                f"{descartados}"
-            )
-
-        return resultados
-
-    except requests.RequestException as erro:
-
-        print(
-            f"❌ Erro na consulta RSS: {erro}"
-        )
-
-        return []
-
-
-# ============================================================
 # PALAVRAS-CHAVE
 # ============================================================
 
 PALAVRAS_POSITIVAS = [
+
     "engenheiro orcamentista",
     "engenheiro de custos",
     "engenheiro de planejamento",
@@ -444,6 +418,7 @@ PALAVRAS_POSITIVAS = [
 
 
 PALAVRAS_NEGATIVAS = [
+
     "estagio",
     "estagiario",
     "estagiaria",
@@ -471,6 +446,7 @@ PALAVRAS_NEGATIVAS = [
 
 
 PALAVRAS_NIVEL = [
+
     "pleno",
     "senior",
     "sr",
@@ -482,6 +458,7 @@ PALAVRAS_NIVEL = [
 
 
 PALAVRAS_CLT = [
+
     "clt",
     "efetivo",
     "efetiva",
@@ -490,6 +467,7 @@ PALAVRAS_CLT = [
 
 
 PALAVRAS_PJ = [
+
     "pj",
     "pessoa juridica",
     "prestador de servicos",
@@ -498,13 +476,16 @@ PALAVRAS_PJ = [
 
 
 PALAVRAS_LOCAL = {
+
     "Rio de Janeiro": [
         "rio de janeiro",
         "rj",
     ],
+
     "Niterói": [
         "niteroi",
     ],
+
     "São Gonçalo": [
         "sao goncalo",
     ],
@@ -516,15 +497,17 @@ PALAVRAS_LOCAL = {
 # ============================================================
 
 def extrair_salarios(texto):
-    """
-    Tenta encontrar valores salariais no título/snippet.
-    """
 
-    texto = normalizar_texto(texto)
+    texto = normalizar_texto(
+        texto
+    )
 
     padroes = [
+
         r"r\$\s*([\d\.\,]+)",
+
         r"salario\s*(?:de|:)?\s*r?\$?\s*([\d\.\,]+)",
+
         r"remuneracao\s*(?:de|:)?\s*r?\$?\s*([\d\.\,]+)",
     ]
 
@@ -552,26 +535,32 @@ def extrair_salarios(texto):
 
             try:
 
-                numero = float(valor)
+                numero = float(
+                    valor
+                )
 
                 if numero >= 1000:
+
                     valores.append(
                         numero
                     )
 
             except ValueError:
+
                 continue
 
     return valores
 
 
 # ============================================================
-# ANÁLISE DE REGIME
+# REGIME
 # ============================================================
 
 def identificar_regime(texto):
 
-    texto = normalizar_texto(texto)
+    texto = normalizar_texto(
+        texto
+    )
 
     encontrou_clt = any(
         palavra in texto
@@ -596,18 +585,21 @@ def identificar_regime(texto):
 
 
 # ============================================================
-# ANÁLISE DE NÍVEL
+# NÍVEL
 # ============================================================
 
 def identificar_nivel(texto):
 
-    texto = normalizar_texto(texto)
+    texto = normalizar_texto(
+        texto
+    )
 
     encontrados = []
 
     for palavra in PALAVRAS_NIVEL:
 
         if palavra in texto:
+
             encontrados.append(
                 palavra
             )
@@ -619,33 +611,28 @@ def identificar_nivel(texto):
         "senior" in encontrados
         or "sr" in encontrados
     ):
+
         return "Sênior"
 
     if "pleno" in encontrados:
+
         return "Pleno"
-
-    if "especialista" in encontrados:
-        return "Especialista"
-
-    if (
-        "coordenador" in encontrados
-        or "coordenadora" in encontrados
-    ):
-        return "Coordenador"
-
-    if "gerente" in encontrados:
-        return "Gerente"
 
     return encontrados[0].title()
 
 
 # ============================================================
-# ANÁLISE DE LOCALIZAÇÃO
+# LOCALIZAÇÃO
 # ============================================================
 
-def identificar_local(texto, local_busca):
+def identificar_local(
+    texto,
+    local_busca,
+):
 
-    texto = normalizar_texto(texto)
+    texto = normalizar_texto(
+        texto
+    )
 
     locais_encontrados = []
 
@@ -686,7 +673,9 @@ def calcular_score(resultado):
         resultado["snippet"]
     )
 
-    texto = f"{titulo} {snippet}"
+    texto = (
+        f"{titulo} {snippet}"
+    )
 
     score = 0
 
@@ -697,6 +686,7 @@ def calcular_score(resultado):
     # --------------------------------------------------------
 
     cargos_fortes = [
+
         "engenheiro orcamentista",
         "engenheiro de custos",
         "engenheiro de planejamento",
@@ -736,6 +726,7 @@ def calcular_score(resultado):
     # --------------------------------------------------------
 
     areas = [
+
         "orcamento",
         "orcamentista",
         "custos",
@@ -885,7 +876,7 @@ def calcular_score(resultado):
             )
 
     # --------------------------------------------------------
-    # PALAVRAS POSITIVAS ADICIONAIS
+    # PALAVRAS POSITIVAS
     # --------------------------------------------------------
 
     palavras_encontradas = 0
@@ -918,7 +909,9 @@ def calcular_score(resultado):
             )
 
     penalidade = min(
-        len(palavras_negativas_encontradas) * 20,
+        len(
+            palavras_negativas_encontradas
+        ) * 20,
         60,
     )
 
@@ -966,16 +959,27 @@ def calcular_score(resultado):
 
     else:
 
-        classificacao = "DESCARTAR"
+        classificacao = (
+            "DESCARTAR"
+        )
 
     return {
+
         "score": score,
+
         "classificacao": classificacao,
+
         "regime": regime,
+
         "nivel": nivel,
+
         "localizacao_identificada": local,
+
         "salario_detectado": salario_detectado,
-        "motivos": " | ".join(motivos),
+
+        "motivos": " | ".join(
+            motivos
+        ),
     }
 
 
@@ -1047,9 +1051,12 @@ for resultado in todos_resultados:
     url = resultado["url"]
 
     if url in urls_vistas:
+
         continue
 
-    urls_vistas.add(url)
+    urls_vistas.add(
+        url
+    )
 
     resultados_unicos.append(
         resultado
@@ -1065,6 +1072,7 @@ arquivo_original = (
 )
 
 campos_originais = [
+
     "titulo",
     "site",
     "url",
@@ -1173,6 +1181,7 @@ arquivo_filtrado = (
 )
 
 campos_filtrados = [
+
     "score",
     "classificacao",
     "titulo",
