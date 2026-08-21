@@ -359,4 +359,3 @@ print("\n")
 print("=" * 70)
 print("JOB HUNTER EXECUTADO COM SUCESSO")
 print("=" * 70)
-```
